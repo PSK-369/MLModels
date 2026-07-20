@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+Simple Keep-Alive Script using only requests
+Works for most Streamlit apps
+"""
+
+import time
+import logging
+import requests
+from datetime import datetime
+from urllib.parse import urlparse, urljoin
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.FileHandler('results.log'), logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+SLEEP_INDICATORS = [
+    "gone to inactivity",
+    "wake it back up",
+    "zzzz",
+    "this app has gone to sleep",
+]
+
+
+def load_urls(filename: str = "urls.txt") -> list:
+    urls = []
+    try:
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    urls.append(line)
+    except FileNotFoundError:
+        urls = ["https://marriedlifepred.streamlit.app/"]
+    return urls
+
+
+def is_sleeping(content: str) -> bool:
+    content_lower = content.lower()
+    return any(indicator.lower() in content_lower for indicator in SLEEP_INDICATORS)
+
+
+def wake_up_streamlit(url: str) -> bool:
+    """Attempt to wake up a Streamlit app using its API"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+    
+    try:
+        # First GET request to check status and get any cookies
+        session = requests.Session()
+        response = session.get(url, headers=headers, timeout=30)
+        
+        if is_sleeping(response.text):
+            logger.info(f"😴 Sleeping: {url}")
+            
+            # Try Streamlit's wake-up endpoint
+            wake_urls = [
+                urljoin(url, '/_stcore/health'),
+                urljoin(url, '/healthz'),
+                url,
+            ]
+            
+            for wake_url in wake_urls:
+                try:
+                    # POST request to wake up
+                    wake_response = session.post(wake_url, headers=headers, timeout=30)
+                    if wake_response.status_code < 400:
+                        logger.info(f"🔄 Wake request sent to {wake_url}")
+                        time.sleep(5)  # Wait for wake-up
+                        
+                        # Verify it's awake
+                        verify = session.get(url, headers=headers, timeout=30)
+                        if not is_sleeping(verify.text):
+                            logger.info(f"✅ Woke up: {url}")
+                            return True
+                except:
+                    continue
+            
+            # Final verification - just making a request might be enough
+            time.sleep(10)
+            final = session.get(url, headers=headers, timeout=30)
+            if not is_sleeping(final.text):
+                logger.info(f"✅ Woke up: {url}")
+                return True
+            
+            logger.warning(f"⚠️ May still be waking: {url}")
+            return True  # Assume it's processing
+        else:
+            logger.info(f"✅ Already running: {url}")
+            return True
+            
+    except requests.RequestException as e:
+        logger.error(f"❌ Error with {url}: {e}")
+        return False
+
+
+def main():
+    logger.info(f"Started at {datetime.now().isoformat()}")
+    
+    urls = load_urls()
+    logger.info(f"Checking {len(urls)} URLs")
+    
+    results = {'success': 0, 'failed': 0}
+    
+    for i, url in enumerate(urls, 1):
+        logger.info(f"\n[{i}/{len(urls)}] {url}")
+        if wake_up_streamlit(url):
+            results['success'] += 1
+        else:
+            results['failed'] += 1
+        time.sleep(2)
+    
+    logger.info(f"\n{'='*40}")
+    logger.info(f"Results: {results['success']} success, {results['failed']} failed")
+    logger.info(f"Completed at {datetime.now().isoformat()}")
+
+
+if __name__ == "__main__":
+    main()
